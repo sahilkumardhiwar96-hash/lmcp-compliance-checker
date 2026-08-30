@@ -1,0 +1,83 @@
+{
+  "rules": [
+    {
+      "field": "manufacturer_details",
+      "label": "Name and address of manufacturer/packer/importer",
+      "label_hi": "निर्माता/पैकर/आयातक का नाम और पता",
+      "legal_reference": "Rule 6(1) of the Legal Metrology (Packaged Commodities) Rules, 2011",
+      "legal_reference_hi": "विधिक माप विज्ञान (पैकबंद वस्तु) नियम, 2011 का नियम 6(1)",
+      "required": true
+    },
+    {
+      "field": "common_name",
+      "label": "Common or generic name of the commodity",
+      "label_hi": "वस्तु का सामान्य नाम",
+      "legal_reference": "Rule 6(1) of the Legal Metrology (Packaged Commodities) Rules, 2011",
+      "legal_reference_hi": "विधिक माप विज्ञान (पैकबंद वस्तु) नियम, 2011 का नियम 6(1)",
+      "required": true
+    },
+    {
+      "field": "net_quantity",
+      "label": "Net quantity in standard units (weight, volume, or number)",
+      "label_hi": "निवल मात्रा (वज़न, आयतन या संख्या में)",
+      "legal_reference": "Rule 6(1) read with Rule 5 (declaration in standard SI units) of the Legal Metrology (Packaged Commodities) Rules, 2011",
+      "legal_reference_hi": "विधिक माप विज्ञान (पैकबंद वस्तु) नियम, 2011 का नियम 6(1) एवं नियम 5",
+      "required": true
+    },
+    {
+      "field": "mrp",
+      "label": "Maximum Retail Price inclusive of all taxes",
+      "label_hi": "अधिकतम खुदरा मूल्य (सभी करों सहित)",
+      "legal_reference": "Rule 6(1) of the Legal Metrology (Packaged Commodities) Rules, 2011",
+      "legal_reference_hi": "विधिक माप विज्ञान (पैकबंद वस्तु) नियम, 2011 का नियम 6(1)",
+      "required": true
+    },
+    {
+      "field": "mfg_date",
+      "label": "Month and year of manufacture/packing/import",
+      "label_hi": "निर्माण/पैकिंग/आयात का माह और वर्ष",
+      "legal_reference": "Rule 6(1) of the Legal Metrology (Packaged Commodities) Rules, 2011",
+      "legal_reference_hi": "विधिक माप विज्ञान (पैकबंद वस्तु) नियम, 2011 का नियम 6(1)",
+      "required": true
+    },
+    {
+      "field": "consumer_care",
+      "label": "Consumer care details (name, address, telephone/email)",
+      "label_hi": "उपभोक्ता सेवा विवरण (नाम, पता, टेलीफोन/ईमेल)",
+      "legal_reference": "Rule 6(2) of the Legal Metrology (Packaged Commodities) Rules, 2011",
+      "legal_reference_hi": "विधिक माप विज्ञान (पैकबंद वस्तु) नियम, 2011 का नियम 6(2)",
+      "required": true
+    },
+    {
+      "field": "font_legibility",
+      "label": "Font size and legibility of declarations",
+      "label_hi": "घोषणाओं का फ़ॉन्ट आकार और पठनीयता",
+      "legal_reference": "Rule 7 of the Legal Metrology (Packaged Commodities) Rules, 2011 (minimum height of numerals/letters, per Table I/II)",
+      "legal_reference_hi": "विधिक माप विज्ञान (पैकबंद वस्तु) नियम, 2011 का नियम 7 (अंकों/अक्षरों की न्यूनतम ऊँचाई)",
+      "required": true,
+      "note": "Checked via AI relative judgment, not physical mm measurement."
+    },
+    {
+      "field": "placement",
+      "label": "Placement and prominence of declarations",
+      "label_hi": "घोषणाओं का स्थान और प्रमुखता",
+      "legal_reference": "Rule 9 of the Legal Metrology (Packaged Commodities) Rules, 2011 (declarations must appear on the principal display panel, grouped and prominent)",
+      "legal_reference_hi": "विधिक माप विज्ञान (पैकबंद वस्तु) नियम, 2011 का नियम 9 (मुख्य प्रदर्शन पटल पर घोषणाएं)",
+      "required": true,
+      "note": "AI-assessed relative judgment of whether declarations are grouped together and prominently displayed, not a definitive legal determination of principal display panel compliance."
+    },
+    {
+      "field": "misleading",
+      "label": "No misleading, conflicting, or improperly altered declarations",
+      "label_hi": "कोई भ्रामक, परस्पर विरोधी या अनुचित रूप से परिवर्तित घोषणा नहीं",
+      "legal_reference": "Rule 6(3) and Rule 18 of the Legal Metrology (Packaged Commodities) Rules, 2011 (prohibition on altering, obliterating, or improperly stickering declarations, particularly the retail sale price)",
+      "legal_reference_hi": "विधिक माप विज्ञान (पैकबंद वस्तु) नियम, 2011 का नियम 6(3) एवं नियम 18 (घोषणाओं विशेषतः खुदरा मूल्य में परिवर्तन/मिटाना निषिद्ध)",
+      "required": true,
+      "note": "AI-assessed check for visible signs of tampering: conflicting values for the same declaration (e.g. two different MRPs), stickers covering the original declaration, mismatched print/font suggesting alteration. Not a definitive forensic determination."
+    }
+  ],
+  "notes": {
+    "penalty_reference": "Non-compliance is punishable under Section 36(1) of the Legal Metrology Act, 2009.",
+    "penalty_reference_hi": "अननुपालन विधिक माप विज्ञान अधिनियम, 2009 की धारा 36(1) के तहत दंडनीय है।"
+  }
+}
