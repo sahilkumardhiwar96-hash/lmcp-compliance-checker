@@ -6,3 +6,4 @@ pillow
 fpdf2
 pandas
 uharfbuzz
+pytesseract
