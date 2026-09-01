@@ -122,7 +122,17 @@ FIELD_LEGAL_REF = {r["field"]: r["legal_reference"] for r in RULE_ENGINE}
 # =====================================================================
 # GEMINI
 # =====================================================================
-genai.configure(api_key=os.environ.get("GOOGLE_API_KEY"))
+# =====================================================================
+# GEMINI
+# =====================================================================
+GOOGLE_API_KEY = st.secrets.get("GOOGLE_API_KEY")
+
+if not GOOGLE_API_KEY:
+    st.error("❌ Gemini API key is not configured. Please add GOOGLE_API_KEY in Streamlit Secrets.")
+    st.stop()
+
+genai.configure(api_key=GOOGLE_API_KEY)
+
 model = genai.GenerativeModel("gemini-3.6-flash")
 
 EXTRACTION_PROMPT = """You are a Legal Metrology compliance inspector. Look at this packaged commodity label image and check for the following mandatory declarations required under the Legal Metrology (Packaged Commodities) Rules, 2011:
