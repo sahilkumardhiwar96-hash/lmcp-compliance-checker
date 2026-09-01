@@ -38,6 +38,16 @@ def init_db():
     existing_cols = {row[1] for row in cur.fetchall()}
     if "scanned_by" not in existing_cols:
         cur.execute("ALTER TABLE scans ADD COLUMN scanned_by TEXT")
+    # Migration for the calibrated Rule 7 numeral-height verification result
+    # (font_height.py). NULL means "not verified with a physical reference".
+    for col, coltype in [
+        ("font_height_measured_mm", "REAL"),
+        ("font_height_required_mm", "REAL"),
+        ("font_height_verdict", "TEXT"),
+        ("font_height_field", "TEXT"),
+    ]:
+        if col not in existing_cols:
+            cur.execute(f"ALTER TABLE scans ADD COLUMN {col} {coltype}")
     conn.commit()
     cur.execute("""
         CREATE TABLE IF NOT EXISTS users (
@@ -157,12 +167,16 @@ def get_all_users():
     return [dict(row) for row in rows]
 
 
-def save_scan(filename, score, found, missing, image_bytes, media_type, latitude=None, longitude=None, location_name=None, scanned_by=None):
+def save_scan(filename, score, found, missing, image_bytes, media_type, latitude=None, longitude=None, location_name=None, scanned_by=None, font_height_result=None):
+    """font_height_result, if provided, is a dict from the Rule 7 calibrated
+    measurement flow: {"measured_mm": float, "required_mm": float, "verdict": "PASS"/"FAIL", "field": "net_quantity"/"mrp"}."""
     conn = sqlite3.connect(DB_PATH)
     cur = conn.cursor()
+    fh = font_height_result or {}
     cur.execute("""
-        INSERT INTO scans (filename, scan_time, score, found_json, missing_json, image_blob, image_media_type, latitude, longitude, location_name, scanned_by)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        INSERT INTO scans (filename, scan_time, score, found_json, missing_json, image_blob, image_media_type, latitude, longitude, location_name, scanned_by,
+                            font_height_measured_mm, font_height_required_mm, font_height_verdict, font_height_field)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     """, (
         filename,
         datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
@@ -175,6 +189,10 @@ def save_scan(filename, score, found, missing, image_bytes, media_type, latitude
         longitude,
         location_name,
         scanned_by,
+        fh.get("measured_mm"),
+        fh.get("required_mm"),
+        fh.get("verdict"),
+        fh.get("field"),
     ))
     conn.commit()
     scan_id = cur.lastrowid
@@ -218,6 +236,65 @@ def search_scans(query):
     rows = cur.fetchall()
     conn.close()
     return [dict(row) for row in rows]
+
+
+def search_scans_advanced(filename=None, scanned_by=None, date_from=None, date_to=None,
+                           min_score=None, max_score=None, violation_label=None, limit=500):
+    """Multi-filter search over inspection history. Every filter is optional and
+    combined with AND, so an officer can narrow by any combination of:
+      - filename (substring match)
+      - scanned_by (exact officer/admin username)
+      - date_from / date_to ("YYYY-MM-DD" — inclusive range on scan_time)
+      - min_score / max_score (compliance score %, inclusive range)
+      - violation_label (only scans where this declaration is among the missing/violations)
+    Returns scans newest-first, capped at `limit`.
+    """
+    clauses = []
+    params = []
+
+    if filename:
+        clauses.append("(filename LIKE ? OR location_name LIKE ?)")
+        params.extend([f"%{filename}%", f"%{filename}%"])
+    if scanned_by:
+        clauses.append("scanned_by = ?")
+        params.append(scanned_by)
+    if date_from:
+        clauses.append("scan_time >= ?")
+        params.append(f"{date_from} 00:00:00")
+    if date_to:
+        clauses.append("scan_time <= ?")
+        params.append(f"{date_to} 23:59:59")
+    if min_score is not None:
+        clauses.append("score >= ?")
+        params.append(min_score)
+    if max_score is not None:
+        clauses.append("score <= ?")
+        params.append(max_score)
+    if violation_label:
+        # missing_json stores entries like {"label": "<declaration label>", ...} —
+        # a substring match on the serialized JSON is enough for filtering without
+        # requiring SQLite's json1 extension to be compiled in.
+        clauses.append("missing_json LIKE ?")
+        params.append(f'%"label": "{violation_label}%')
+
+    where_sql = f"WHERE {' AND '.join(clauses)}" if clauses else ""
+    conn = sqlite3.connect(DB_PATH)
+    conn.row_factory = sqlite3.Row
+    cur = conn.cursor()
+    cur.execute(f"SELECT * FROM scans {where_sql} ORDER BY id DESC LIMIT ?", (*params, limit))
+    rows = cur.fetchall()
+    conn.close()
+    return [dict(row) for row in rows]
+
+
+def get_distinct_scanners():
+    """List of usernames that have performed at least one scan, for a filter dropdown."""
+    conn = sqlite3.connect(DB_PATH)
+    cur = conn.cursor()
+    cur.execute("SELECT DISTINCT scanned_by FROM scans WHERE scanned_by IS NOT NULL ORDER BY scanned_by")
+    rows = [r[0] for r in cur.fetchall()]
+    conn.close()
+    return rows
 
 
 def get_summary_stats():
