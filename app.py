@@ -1,12 +1,12 @@
 import streamlit as st
 import json
-import os
 import io
 from datetime import datetime
 from collections import Counter
 import pandas as pd
 import google.generativeai as genai
 import requests
+from bs4 import BeautifulSoup
 from streamlit_js_eval import get_geolocation
 from PIL import Image
 
@@ -175,7 +175,73 @@ def analyze_label(image_bytes, media_type):
     return json.loads(raw_reply)
 
 
-def compute_compliance(result_json):
+# =====================================================================
+# E-COMMERCE / PRODUCT LISTING SCANNING (Rule 6(10))
+# Rule 6(10) of the Legal Metrology (Packaged Commodities) Rules, 2011
+# requires every statutory declaration to also be displayed on the
+# product's e-commerce listing page. This lets an officer check a listing
+# URL directly, reusing the same rule engine — but only over the six
+# extractable REQUIRED_FIELDS, since font legibility, placement, and
+# tampering are physical-label checks that don't apply to page text.
+# =====================================================================
+LISTING_EXTRACTION_PROMPT_TEMPLATE = """You are a Legal Metrology compliance inspector reviewing the text content of an e-commerce product listing page. Rule 6(10) of the Legal Metrology (Packaged Commodities) Rules, 2011 requires every statutory declaration to be displayed on the listing page itself.
+
+Check whether the following mandatory declarations are EXPLICITLY present anywhere in the page text below. Do not guess or infer a value that is not clearly stated.
+
+1. manufacturer_details - name and address of manufacturer/packer/importer
+2. common_name - common or generic name of the commodity
+3. net_quantity - net quantity in a standard unit (weight, volume, count, or dimensions)
+4. mrp - Maximum Retail Price, inclusive of all taxes
+5. mfg_date - month and year of manufacture, packing, or import
+6. consumer_care - consumer care details (address, phone number, toll-free number, or email)
+
+PAGE TEXT:
+---
+{page_text}
+---
+
+Respond with ONLY a JSON object, no other text, no markdown code fences, in this exact format:
+{{
+  "manufacturer_details": {{"found": true/false, "value": "extracted text or null"}},
+  "common_name": {{"found": true/false, "value": "extracted text or null"}},
+  "net_quantity": {{"found": true/false, "value": "extracted text or null"}},
+  "mrp": {{"found": true/false, "value": "extracted text or null"}},
+  "mfg_date": {{"found": true/false, "value": "extracted text or null"}},
+  "consumer_care": {{"found": true/false, "value": "extracted text or null"}}
+}}"""
+
+
+def fetch_listing_text(url, max_chars=8000):
+    """Fetch an e-commerce product listing page and return its visible text
+    (title + body copy, scripts/styles stripped), capped to max_chars so the
+    extraction prompt stays a reasonable size."""
+    resp = requests.get(
+        url,
+        headers={"User-Agent": "Mozilla/5.0 (compatible; LegalMetrologyComplianceChecker/1.0)"},
+        timeout=12,
+    )
+    resp.raise_for_status()
+    soup = BeautifulSoup(resp.text, "html.parser")
+    for tag in soup(["script", "style", "noscript"]):
+        tag.decompose()
+    title = soup.title.string.strip() if soup.title and soup.title.string else ""
+    lines = [ln.strip() for ln in soup.get_text(separator="\n").splitlines() if ln.strip()]
+    body_text = "\n".join(lines)
+    combined = f"PAGE TITLE: {title}\n\n{body_text}"
+    return combined[:max_chars]
+
+
+def analyze_listing(page_text):
+    prompt = LISTING_EXTRACTION_PROMPT_TEMPLATE.format(page_text=page_text)
+    response = model.generate_content(prompt)
+    raw_reply = response.text.strip().replace("```json", "").replace("```", "").strip()
+    return json.loads(raw_reply)
+
+
+def compute_compliance(result_json, assessment=True):
+    """assessment=False skips the three physical-label-only checks
+    (font_legibility, placement, misleading) — used for e-commerce listing
+    scans, which have no physical layout to judge."""
     found, missing = [], []
     for field in REQUIRED_FIELDS:
         entry = result_json.get(field, {"found": False, "value": None})
@@ -186,14 +252,15 @@ def compute_compliance(result_json):
         else:
             missing.append({"label": label, "legal_ref": legal_ref})
 
-    for field, rule in ASSESSMENT_RULES.items():
-        entry = result_json.get(field, {"acceptable": False, "notes": "Not assessed"})
-        if entry.get("acceptable"):
-            found.append({"label": rule["label"], "value": entry.get("notes", "Acceptable"), "legal_ref": rule["legal_reference"]})
-        else:
-            missing.append({"label": rule["label"], "legal_ref": rule["legal_reference"], "note": entry.get("notes", "")})
+    if assessment:
+        for field, rule in ASSESSMENT_RULES.items():
+            entry = result_json.get(field, {"acceptable": False, "notes": "Not assessed"})
+            if entry.get("acceptable"):
+                found.append({"label": rule["label"], "value": entry.get("notes", "Acceptable"), "legal_ref": rule["legal_reference"]})
+            else:
+                missing.append({"label": rule["label"], "legal_ref": rule["legal_reference"], "note": entry.get("notes", "")})
 
-    total_checks = len(REQUIRED_FIELDS) + len(ASSESSMENT_RULES)
+    total_checks = len(REQUIRED_FIELDS) + (len(ASSESSMENT_RULES) if assessment else 0)
     score = round((len(found) / total_checks) * 100) if total_checks else 0
     return found, missing, score
 
@@ -356,19 +423,31 @@ if not st.session_state.logged_in:
     )
     st.markdown('</div>', unsafe_allow_html=True)
     uploaded_file = None
+    listing_url = None
 else:
     st.markdown('<div class="card">', unsafe_allow_html=True)
-    st.markdown("### 📷 Scan a product label")
+    st.markdown("### 📷 Scan a product label or e-commerce listing")
     capture_mode = st.radio(
         "Image source",
-        ["Upload a file", "Use camera"],
+        ["Upload a file", "Use camera", "E-commerce listing (URL)"],
         horizontal=True,
         label_visibility="collapsed",
     )
+    uploaded_file = None
+    listing_url = None
     if capture_mode == "Upload a file":
         uploaded_file = st.file_uploader("Upload a product label image", type=["jpg", "jpeg", "png"], label_visibility="collapsed")
-    else:
+    elif capture_mode == "Use camera":
         uploaded_file = st.camera_input("Capture a product label", label_visibility="collapsed")
+    else:
+        st.caption(
+            "Rule 6(10) requires all statutory declarations to appear on the product's e-commerce "
+            "listing page itself. Paste the product page URL below to check it."
+        )
+        url_input = st.text_input("Product listing URL", placeholder="https://www.example.com/product/...")
+        fetch_clicked = st.button("🌐 Fetch & analyze listing")
+        if fetch_clicked and url_input:
+            listing_url = url_input
     st.markdown('</div>', unsafe_allow_html=True)
 
 if uploaded_file is not None:
@@ -561,6 +640,95 @@ if uploaded_file is not None:
         lon = st.session_state.location["lon"] if st.session_state.location else None
         db.save_scan(uploaded_file.name, score, found, missing, image_bytes, media_type, lat, lon, location_name, scanned_by=st.session_state.username, font_height_result=font_height_result)
         st.session_state.pop("_last_font_height_result", None)
+
+elif listing_url:
+    # ---------------------------------------------------------------
+    # E-COMMERCE / PRODUCT LISTING SCAN (text-based, Rule 6(10))
+    # No physical label image, so font/placement/tampering checks are
+    # skipped (compute_compliance(..., assessment=False)); score is out
+    # of the 6 required declarations only.
+    # ---------------------------------------------------------------
+    with st.spinner("🌐 Fetching listing page..."):
+        try:
+            page_text = fetch_listing_text(listing_url)
+        except Exception as e:
+            st.error(f"Couldn't fetch the listing page: {e}")
+            page_text = None
+
+    if page_text:
+        with st.spinner("🔍 Analyzing listing text with AI..."):
+            try:
+                result_json = analyze_listing(page_text)
+                found, missing, score = compute_compliance(result_json, assessment=False)
+            except Exception as e:
+                st.error(f"Error during analysis: {e}")
+                found, missing, score = [], [], 0
+                result_json = {}
+
+        with st.expander("Extracted page text (what the AI actually read)"):
+            st.text(page_text[:3000] + ("..." if len(page_text) > 3000 else ""))
+
+        ring_color = "#1e8e3e" if score == 100 else ("#f9a825" if score >= 50 else "#d93025")
+        st.markdown(f"""
+        <div class="score-box">
+            <div class="num" style="color:{ring_color}">{score}%</div>
+            <div class="label">Compliance score (6 required declarations — Rule 6(10))</div>
+        </div>
+        """, unsafe_allow_html=True)
+        st.caption(
+            "Font legibility, placement, and tampering checks are not applicable to a text-based "
+            "listing and are excluded from this score."
+        )
+
+        st.markdown("**✅ Found declarations**")
+        for f in found:
+            st.markdown(f"""
+            <div class="badge-found">
+                <span class="badge-icon">✅</span>
+                <span class="badge-text"><b>{f['label']}</b> — {f['value']}
+                <span class="badge-sub">{f['legal_ref']}</span></span>
+            </div>
+            """, unsafe_allow_html=True)
+        st.markdown("**❌ Missing declarations (violations)**")
+        if not missing:
+            st.markdown('<div class="badge-found"><span class="badge-icon">🎉</span> No violations detected.</div>', unsafe_allow_html=True)
+        for m in missing:
+            st.markdown(f"""
+            <div class="badge-missing">
+                <span class="badge-icon">❌</span>
+                <span class="badge-text"><b>{m['label']}</b>
+                <span class="badge-sub">Violates {m['legal_ref']}</span></span>
+            </div>
+            """, unsafe_allow_html=True)
+
+        if found or missing:
+            st.markdown("#### 📄 Download compliance report")
+            row1_col1, row1_col2 = st.columns(2)
+            with row1_col1:
+                pdf_en = generate_pdf_report(None, found, missing, score, listing_url, FIELD_LABELS, lang="en", location_name=None)
+                st.download_button(
+                    "📄 PDF Report (English)",
+                    data=pdf_en,
+                    file_name=f"compliance_report_listing_{datetime.now().strftime('%Y%m%d_%H%M%S')}.pdf",
+                    mime="application/pdf",
+                )
+            with row1_col2:
+                docx_en = generate_docx_report(None, found, missing, score, listing_url, FIELD_LABELS, lang="en", location_name=None)
+                st.download_button(
+                    "📝 Word (English)",
+                    data=docx_en,
+                    file_name=f"compliance_report_listing_{datetime.now().strftime('%Y%m%d_%H%M%S')}.docx",
+                    mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+                )
+            csv_data = generate_csv_report(found, missing, score, listing_url, None)
+            st.download_button(
+                "📊 CSV (raw data)",
+                data=csv_data,
+                file_name=f"compliance_data_listing_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv",
+                mime="text/csv",
+            )
+
+            db.save_scan(listing_url, score, found, missing, None, None, None, None, listing_url, scanned_by=st.session_state.username)
 
 # =====================================================================
 # STAFF PANEL (role-based: officer = view-only dashboard, admin = full access)
