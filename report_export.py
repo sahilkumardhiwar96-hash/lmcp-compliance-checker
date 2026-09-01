@@ -58,9 +58,11 @@ def generate_csv_report(found, missing, score, filename, location_name=None):
     return io.BytesIO(buffer.getvalue().encode("utf-8-sig"))  # BOM so Excel opens Unicode correctly
 
 
-def generate_docx_report(image_bytes, found, missing, score, filename, field_labels_en, lang="en", location_name=None):
+def generate_docx_report(image_bytes, found, missing, score, filename, field_labels_en, lang="en", location_name=None, font_height_result=None):
     """Formatted, editable Word report — English or Hindi. Word shapes Devanagari
-    correctly on its own, so no special font-embedding is needed (unlike PDF)."""
+    correctly on its own, so no special font-embedding is needed (unlike PDF).
+    font_height_result, if provided, is the calibrated Rule 7 measurement dict
+    from font_height.py: {"measured_mm", "required_mm", "verdict", "field"}."""
     s = PDF_STRINGS[lang]
     font_name = "Nirmala UI" if lang == "hi" else "Calibri"  # Nirmala UI ships with Windows and renders Devanagari well
 
@@ -171,6 +173,17 @@ def generate_docx_report(image_bytes, found, missing, score, filename, field_lab
         _set_complex_script_font(p.runs[0], font_name)
     else:
         p = doc.add_paragraph(s["no_violations"])
+        _set_complex_script_font(p.runs[0], font_name)
+
+    if font_height_result and font_height_result.get("verdict") in ("PASS", "FAIL"):
+        v = font_height_result["verdict"]
+        req_txt = f" (Rule 7 requires \u2265 {font_height_result['required_mm']} mm)" if font_height_result.get("required_mm") else ""
+        p = doc.add_paragraph(
+            f"Rule 7 numeral height \u2014 CALIBRATED MEASUREMENT: {v} \u2014 measured "
+            f"{font_height_result['measured_mm']} mm{req_txt}"
+        )
+        p.runs[0].bold = True
+        p.runs[0].font.color.rgb = RGBColor(0x2E, 0x7D, 0x32) if v == "PASS" else RGBColor(0xC6, 0x28, 0x28)
         _set_complex_script_font(p.runs[0], font_name)
 
     for text in [s["font_disclaimer"], s["footer_disclaimer"]]:
