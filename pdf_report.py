@@ -30,8 +30,10 @@ class ReportPDF(FPDF):
         self.set_auto_page_break(auto=True, margin=15)
 
 
-def generate_pdf_report(image_bytes, found, missing, score, filename, field_labels_en, lang="en", location_name=None):
-    """Build a compliance report PDF in the requested language ('en' or 'hi')."""
+def generate_pdf_report(image_bytes, found, missing, score, filename, field_labels_en, lang="en", location_name=None, font_height_result=None):
+    """Build a compliance report PDF in the requested language ('en' or 'hi').
+    font_height_result, if provided, is the calibrated Rule 7 measurement dict
+    from font_height.py: {"measured_mm", "required_mm", "verdict", "field"}."""
     s = PDF_STRINGS[lang]
 
     pdf = ReportPDF()
@@ -110,6 +112,20 @@ def generate_pdf_report(image_bytes, found, missing, score, filename, field_labe
     else:
         pdf.set_font("Noto", "", 10.5)
         pdf.multi_cell(0, 6.5, s["no_violations"], new_x="LMARGIN", new_y="NEXT")
+
+    if font_height_result and font_height_result.get("verdict") in ("PASS", "FAIL"):
+        pdf.ln(3)
+        v = font_height_result["verdict"]
+        color = GREEN if v == "PASS" else RED
+        pdf.set_font("Noto", "B", 10.5)
+        pdf.set_text_color(*color)
+        req_txt = f" (Rule 7 requires \u2265 {font_height_result['required_mm']} mm)" if font_height_result.get("required_mm") else ""
+        verified_line = (
+            f"Rule 7 numeral height \u2014 CALIBRATED MEASUREMENT: {v} \u2014 measured "
+            f"{font_height_result['measured_mm']} mm{req_txt}"
+        )
+        pdf.multi_cell(0, 6, verified_line, new_x="LMARGIN", new_y="NEXT")
+        pdf.set_text_color(0, 0, 0)
 
     pdf.ln(6)
     pdf.set_font("Noto", "", 8)
