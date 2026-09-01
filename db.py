@@ -13,6 +13,19 @@ def _hash_password(password, salt):
     return hashlib.sha256((salt + password).encode("utf-8")).hexdigest()
 
 
+def _add_column_if_missing(cur, table, col, coltype):
+    """ALTER TABLE ... ADD COLUMN, tolerant of a concurrent init_db() call
+    (e.g. two Streamlit sessions/reruns hitting this at the same moment)
+    already having added the same column between our PRAGMA check and this
+    statement. SQLite raises 'duplicate column name' in that case, which we
+    treat as success rather than a fatal error."""
+    try:
+        cur.execute(f"ALTER TABLE {table} ADD COLUMN {col} {coltype}")
+    except sqlite3.OperationalError as e:
+        if "duplicate column name" not in str(e).lower():
+            raise
+
+
 def init_db():
     """Create tables if they don't exist, and seed default accounts on first run."""
     conn = sqlite3.connect(DB_PATH)
@@ -37,7 +50,7 @@ def init_db():
     cur.execute("PRAGMA table_info(scans)")
     existing_cols = {row[1] for row in cur.fetchall()}
     if "scanned_by" not in existing_cols:
-        cur.execute("ALTER TABLE scans ADD COLUMN scanned_by TEXT")
+        _add_column_if_missing(cur, "scans", "scanned_by", "TEXT")
     # Migration for the calibrated Rule 7 numeral-height verification result
     # (font_height.py). NULL means "not verified with a physical reference".
     for col, coltype in [
@@ -47,7 +60,7 @@ def init_db():
         ("font_height_field", "TEXT"),
     ]:
         if col not in existing_cols:
-            cur.execute(f"ALTER TABLE scans ADD COLUMN {col} {coltype}")
+            _add_column_if_missing(cur, "scans", col, coltype)
     conn.commit()
     cur.execute("""
         CREATE TABLE IF NOT EXISTS users (
@@ -65,7 +78,7 @@ def init_db():
     cur.execute("PRAGMA table_info(users)")
     existing_user_cols = {row[1] for row in cur.fetchall()}
     if "must_change_password" not in existing_user_cols:
-        cur.execute("ALTER TABLE users ADD COLUMN must_change_password INTEGER NOT NULL DEFAULT 0")
+        _add_column_if_missing(cur, "users", "must_change_password", "INTEGER NOT NULL DEFAULT 0")
         conn.commit()
 
     cur.execute("SELECT COUNT(*) FROM users")
