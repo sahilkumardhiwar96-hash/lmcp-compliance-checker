@@ -1,15 +1,18 @@
 import streamlit as st
 import json
 import os
+import io
 from datetime import datetime
 from collections import Counter
 import pandas as pd
 import google.generativeai as genai
 import requests
 from streamlit_js_eval import get_geolocation
+from PIL import Image
 
 import db
 import rules_manager
+import font_height as fh
 from pdf_report import generate_pdf_report
 from report_export import generate_csv_report, generate_docx_report
 
@@ -346,7 +349,16 @@ if not st.session_state.logged_in:
 else:
     st.markdown('<div class="card">', unsafe_allow_html=True)
     st.markdown("### 📷 Scan a product label")
-    uploaded_file = st.file_uploader("Upload a product label image", type=["jpg", "jpeg", "png"], label_visibility="collapsed")
+    capture_mode = st.radio(
+        "Image source",
+        ["Upload a file", "Use camera"],
+        horizontal=True,
+        label_visibility="collapsed",
+    )
+    if capture_mode == "Upload a file":
+        uploaded_file = st.file_uploader("Upload a product label image", type=["jpg", "jpeg", "png"], label_visibility="collapsed")
+    else:
+        uploaded_file = st.camera_input("Capture a product label", label_visibility="collapsed")
     st.markdown('</div>', unsafe_allow_html=True)
 
 if uploaded_file is not None:
@@ -407,13 +419,93 @@ if uploaded_file is not None:
         with st.expander("Raw AI response (for debugging)"):
             st.json(result_json)
 
+    # =================================================================
+    # RULE 7 — PRECISE NUMERAL-HEIGHT VERIFICATION (calibrated, optional)
+    # AI's font_legibility judgment above is a relative opinion, not a
+    # physical measurement. This section lets the officer measure the
+    # actual printed numeral height in millimetres using local OCR
+    # (independent of Gemini) plus an in-frame calibration reference,
+    # and compare it against the Rule 7 Table-I threshold.
+    # =================================================================
+    font_height_result = None
+    st.markdown('<div class="card">', unsafe_allow_html=True)
+    st.markdown("### 🔬 Verify Rule 7 numeral height (precise, optional)")
+    st.caption(
+        "The AI legibility check above is a relative judgment. Use this section for a physical "
+        "mm measurement an inspector can rely on in an enforcement action."
+    )
+
+    if not fh.tesseract_available():
+        st.warning(
+            "Local OCR (Tesseract) is not available in this environment, so precise measurement "
+            "can't run here. The AI relative-judgment check above remains the only font/legibility "
+            "signal for this scan."
+        )
+    else:
+        pil_image = Image.open(io.BytesIO(image_bytes)).convert("RGB")
+        word_boxes = fh.get_word_boxes(pil_image)
+
+        if not word_boxes:
+            st.info("No text boxes were detected by OCR on this image — try a clearer, well-lit photo.")
+        else:
+            box_options = {
+                f"\"{b.text}\"  (h={b.height}px, conf={b.confidence:.0f}%)  @({b.left},{b.top})": b
+                for b in word_boxes
+            }
+            box_label = st.selectbox(
+                "1. Select the OCR box for the numeral you want to verify (e.g. the net-quantity or MRP figure)",
+                list(box_options.keys()),
+            )
+            selected_box = box_options[box_label]
+
+            st.write(
+                "2. Calibrate: measure something else **in the same photo** whose real-world size you know "
+                "(a ruler, a coin, or the pack's own printed dimension), in pixels and in millimetres."
+            )
+            cal_col1, cal_col2 = st.columns(2)
+            with cal_col1:
+                ref_px = st.number_input("Reference length in the photo (pixels)", min_value=0.0, value=0.0, step=1.0)
+            with cal_col2:
+                ref_mm = st.number_input("Real-world length of that reference (mm)", min_value=0.0, value=0.0, step=0.5)
+
+            net_qty_value = next((f["value"] for f in found if f["label"] == FIELD_LABELS.get("net_quantity")), None)
+            required_info = fh.required_height_mm(net_qty_value) if net_qty_value else None
+
+            if st.button("📏 Measure numeral height"):
+                measured_mm = fh.measure_height_mm(selected_box.height, ref_px, ref_mm)
+                if measured_mm is None:
+                    st.error("Couldn't measure — check that both calibration values are greater than zero.")
+                elif required_info is None:
+                    st.warning(
+                        f"Measured height: **{measured_mm} mm**. Could not determine the Rule 7 Table-I "
+                        f"requirement automatically (net quantity '{net_qty_value}' doesn't parse as a "
+                        "weight/volume — Table-II count-based items need manual lookup)."
+                    )
+                    font_height_result = {"measured_mm": measured_mm, "required_mm": None, "verdict": "UNVERIFIED", "field": "selected_box"}
+                else:
+                    required_mm = required_info["required_mm"]
+                    verdict = "PASS" if measured_mm >= required_mm else "FAIL"
+                    color = "#1e8e3e" if verdict == "PASS" else "#d93025"
+                    st.markdown(
+                        f"**Measured height: {measured_mm} mm** — Rule 7 requires ≥ **{required_mm} mm** "
+                        f"for this net quantity — <span style='color:{color};font-weight:700'>{verdict}</span>",
+                        unsafe_allow_html=True,
+                    )
+                    font_height_result = {"measured_mm": measured_mm, "required_mm": required_mm, "verdict": verdict, "field": "net_quantity"}
+                st.session_state["_last_font_height_result"] = font_height_result
+                st.caption(fh.LEGAL_CAUTION)
+
+    if st.session_state.get("_last_font_height_result"):
+        font_height_result = st.session_state["_last_font_height_result"]
+    st.markdown('</div>', unsafe_allow_html=True)
+
     if found or missing:
         st.markdown("#### 📄 Download compliance report")
         st.caption("PDF for filing/printing · Word for editing · CSV for raw data/spreadsheets")
 
         row1_col1, row1_col2 = st.columns(2)
         with row1_col1:
-            pdf_en = generate_pdf_report(image_bytes, found, missing, score, uploaded_file.name, FIELD_LABELS, lang="en", location_name=location_name)
+            pdf_en = generate_pdf_report(image_bytes, found, missing, score, uploaded_file.name, FIELD_LABELS, lang="en", location_name=location_name, font_height_result=font_height_result)
             st.download_button(
                 "📄 PDF Report (English)",
                 data=pdf_en,
@@ -421,7 +513,7 @@ if uploaded_file is not None:
                 mime="application/pdf",
             )
         with row1_col2:
-            pdf_hi = generate_pdf_report(image_bytes, found, missing, score, uploaded_file.name, FIELD_LABELS, lang="hi", location_name=location_name)
+            pdf_hi = generate_pdf_report(image_bytes, found, missing, score, uploaded_file.name, FIELD_LABELS, lang="hi", location_name=location_name, font_height_result=font_height_result)
             st.download_button(
                 "📄 रिपोर्ट (हिन्दी PDF)",
                 data=pdf_hi,
@@ -431,7 +523,7 @@ if uploaded_file is not None:
 
         row2_col1, row2_col2, row2_col3 = st.columns(3)
         with row2_col1:
-            docx_en = generate_docx_report(image_bytes, found, missing, score, uploaded_file.name, FIELD_LABELS, lang="en", location_name=location_name)
+            docx_en = generate_docx_report(image_bytes, found, missing, score, uploaded_file.name, FIELD_LABELS, lang="en", location_name=location_name, font_height_result=font_height_result)
             st.download_button(
                 "📝 Word (English)",
                 data=docx_en,
@@ -439,7 +531,7 @@ if uploaded_file is not None:
                 mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
             )
         with row2_col2:
-            docx_hi = generate_docx_report(image_bytes, found, missing, score, uploaded_file.name, FIELD_LABELS, lang="hi", location_name=location_name)
+            docx_hi = generate_docx_report(image_bytes, found, missing, score, uploaded_file.name, FIELD_LABELS, lang="hi", location_name=location_name, font_height_result=font_height_result)
             st.download_button(
                 "📝 वर्ड रिपोर्ट (हिन्दी)",
                 data=docx_hi,
@@ -457,7 +549,8 @@ if uploaded_file is not None:
 
         lat = st.session_state.location["lat"] if st.session_state.location else None
         lon = st.session_state.location["lon"] if st.session_state.location else None
-        db.save_scan(uploaded_file.name, score, found, missing, image_bytes, media_type, lat, lon, location_name, scanned_by=st.session_state.username)
+        db.save_scan(uploaded_file.name, score, found, missing, image_bytes, media_type, lat, lon, location_name, scanned_by=st.session_state.username, font_height_result=font_height_result)
+        st.session_state.pop("_last_font_height_result", None)
 
 # =====================================================================
 # STAFF PANEL (role-based: officer = view-only dashboard, admin = full access)
@@ -505,8 +598,45 @@ if st.session_state.logged_in:
                 st.caption("No violations recorded yet.")
 
         st.divider()
-        search_query = st.text_input("Search by filename or location")
-        records = db.search_scans(search_query) if search_query else db.get_all_scans()
+        st.markdown("#### 🔎 Search & filter inspection history")
+        with st.form("search_filters_form"):
+            f_col1, f_col2, f_col3 = st.columns(3)
+            with f_col1:
+                filter_text = st.text_input("Filename or location contains")
+            with f_col2:
+                scanner_options = ["All officers/admins"] + db.get_distinct_scanners()
+                filter_scanner = st.selectbox("Scanned by", scanner_options)
+            with f_col3:
+                violation_options = ["Any"] + list(FIELD_LABELS.values())
+                filter_violation = st.selectbox("Has this violation", violation_options)
+
+            f_col4, f_col5, f_col6 = st.columns(3)
+            with f_col4:
+                filter_date_from = st.date_input("From date", value=None)
+            with f_col5:
+                filter_date_to = st.date_input("To date", value=None)
+            with f_col6:
+                filter_score_range = st.slider("Compliance score range (%)", 0, 100, (0, 100))
+
+            filters_submitted = st.form_submit_button("Apply filters")
+
+        any_filter_active = any([
+            filter_text, filter_scanner != "All officers/admins", filter_violation != "Any",
+            filter_date_from, filter_date_to, filter_score_range != (0, 100),
+        ])
+
+        if filters_submitted or any_filter_active:
+            records = db.search_scans_advanced(
+                filename=filter_text or None,
+                scanned_by=None if filter_scanner == "All officers/admins" else filter_scanner,
+                date_from=filter_date_from.strftime("%Y-%m-%d") if filter_date_from else None,
+                date_to=filter_date_to.strftime("%Y-%m-%d") if filter_date_to else None,
+                min_score=filter_score_range[0],
+                max_score=filter_score_range[1],
+                violation_label=None if filter_violation == "Any" else filter_violation,
+            )
+        else:
+            records = db.get_all_scans()
         st.write(f"**{len(records)} scan(s)**")
 
         for rec in records:
@@ -533,6 +663,11 @@ if st.session_state.logged_in:
                             st.write(f"❌ {v}")
                     else:
                         st.write("No violations detected.")
+                    if rec.get("font_height_verdict"):
+                        v = rec["font_height_verdict"]
+                        icon = "✅" if v == "PASS" else ("❌" if v == "FAIL" else "⚠️")
+                        req_txt = f" (required ≥ {rec['font_height_required_mm']} mm)" if rec.get("font_height_required_mm") else ""
+                        st.write(f"**Rule 7 numeral height:** {icon} {v} — measured {rec['font_height_measured_mm']} mm{req_txt}")
 
                 st.markdown("**Re-download this report:**")
                 found_list = json.loads(rec["found_json"])
