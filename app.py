@@ -214,10 +214,25 @@ Respond with ONLY a JSON object, no other text, no markdown code fences, in this
 def fetch_listing_text(url, max_chars=8000):
     """Fetch an e-commerce product listing page and return its visible text
     (title + body copy, scripts/styles stripped), capped to max_chars so the
-    extraction prompt stays a reasonable size."""
+    extraction prompt stays a reasonable size.
+
+    NOTE: Major marketplaces (Amazon, Flipkart, etc.) actively block
+    automated/script-based fetches — even with realistic headers — and will
+    often return a 500/503 or a CAPTCHA page instead of the real listing.
+    This is a platform-side anti-bot measure, not something a request-level
+    fix can reliably get around. When this happens, the officer should use
+    the "Paste page text manually" fallback in the UI instead.
+    """
     resp = requests.get(
         url,
-        headers={"User-Agent": "Mozilla/5.0 (compatible; LegalMetrologyComplianceChecker/1.0)"},
+        headers={
+            "User-Agent": (
+                "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+                "(KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
+            ),
+            "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8",
+            "Accept-Language": "en-IN,en;q=0.9",
+        },
         timeout=12,
     )
     resp.raise_for_status()
@@ -448,6 +463,12 @@ else:
         fetch_clicked = st.button("🌐 Fetch & analyze listing")
         if fetch_clicked and url_input:
             listing_url = url_input
+            st.session_state["ecommerce_url"] = url_input
+            st.session_state.pop("ecommerce_page_text", None)  # force a fresh fetch attempt
+        elif st.session_state.get("ecommerce_url"):
+            # Persist across reruns triggered by the "paste text manually" fallback
+            # button below, which would otherwise lose listing_url on rerun.
+            listing_url = st.session_state["ecommerce_url"]
     st.markdown('</div>', unsafe_allow_html=True)
 
 if uploaded_file is not None:
@@ -652,8 +673,22 @@ elif listing_url:
         try:
             page_text = fetch_listing_text(listing_url)
         except Exception as e:
-            st.error(f"Couldn't fetch the listing page: {e}")
+            st.error(
+                f"Couldn't fetch the listing page automatically ({e}). Many marketplaces "
+                "(Amazon, Flipkart, etc.) block automated fetches with an anti-bot error page — "
+                "this isn't something a retry will fix."
+            )
             page_text = None
+
+    if page_text is None:
+        st.markdown("**Fallback: paste the listing page text manually**")
+        st.caption(
+            "Open the listing in your browser, select all the visible product text (Ctrl+A / Cmd+A "
+            "on the product details area, or the whole page), copy it, and paste it below."
+        )
+        pasted_text = st.text_area("Pasted listing text", height=200, key="pasted_listing_text")
+        if st.button("🔍 Analyze pasted text") and pasted_text.strip():
+            page_text = f"PAGE TITLE: (pasted manually)\n\n{pasted_text.strip()}"
 
     if page_text:
         with st.spinner("🔍 Analyzing listing text with AI..."):
@@ -667,6 +702,11 @@ elif listing_url:
 
         with st.expander("Extracted page text (what the AI actually read)"):
             st.text(page_text[:3000] + ("..." if len(page_text) > 3000 else ""))
+
+        if st.button("🔄 Scan a different listing"):
+            st.session_state.pop("ecommerce_url", None)
+            st.session_state.pop("pasted_listing_text", None)
+            st.rerun()
 
         ring_color = "#1e8e3e" if score == 100 else ("#f9a825" if score >= 50 else "#d93025")
         st.markdown(f"""
