@@ -5,3 +5,4 @@ python-docx
 pillow
 fpdf2
 pandas
+uharfbuzz
