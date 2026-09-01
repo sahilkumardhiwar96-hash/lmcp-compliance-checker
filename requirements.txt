@@ -1,6 +1,7 @@
 streamlit
 google-generativeai
 streamlit-js-eval
+python-docx
 pillow
 fpdf2
 pandas
