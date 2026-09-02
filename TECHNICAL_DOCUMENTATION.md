@@ -26,36 +26,42 @@
 
 ## 2. System Architecture
 
-```mermaid
-flowchart TD
-    U[Enforcement Officer / Admin] -->|Login| AUTH[Auth Layer<br/>db.py: verify_user]
-    AUTH -->|Session role: admin/officer| APP[Streamlit App<br/>app.py]
-
-    APP -->|Upload/camera label image| VISION[Gemini Vision Model<br/>gemini-3.6-flash]
-    APP -->|Listing URL / screenshot / pasted text| LISTING[Listing text extraction<br/>fetch_listing_text + analyze_listing<br/>Rule 6-10]
-    VISION -->|Structured JSON:<br/>found/missing fields| ENGINE[Rule Engine<br/>compute_compliance]
-    LISTING -->|Structured JSON:<br/>found/missing fields| ENGINE
-
-    APP -->|Selected OCR box +<br/>calibration reference| OCR[Tesseract OCR<br/>font_height.py]
-    OCR -->|measured_mm, verdict| APP
-
-    RULES[(rules.json<br/>via rules_manager.py)] --> ENGINE
-    ENGINE -->|score, found[], missing[]| APP
-
-    APP -->|Optional browser geolocation| GEO[Reverse Geocoding<br/>Nominatim OSM API]
-    GEO --> APP
-
-    APP -->|Save scan record<br/>incl. font-height result| DB[(SQLite<br/>compliance_history.db)]
-    APP -->|Generate report| PDFGEN[pdf_report.py<br/>fpdf2 + HarfBuzz shaping]
-    APP -->|Generate report| DOCXGEN[report_export.py<br/>python-docx]
-    APP -->|Generate report| CSVGEN[report_export.py<br/>csv module]
-
-    DB -->|History, search, analytics| APP
-    APP -->|Dashboard charts| CHARTS[pandas + st.bar_chart]
-
-    PDFGEN --> OUT[Downloadable report<br/>PDF/DOCX/CSV]
-    DOCXGEN --> OUT
-    CSVGEN --> OUT
+```
+                         Enforcement Officer / Admin
+                                    |
+                                 (Login)
+                                    v
+                          Auth Layer (db.py)
+                                    |
+                          Streamlit App (app.py)
+                                    |
+              ------------------------------------------------
+              |                                               |
+   Label image (upload/camera)                Listing URL / pasted text
+              |                                               |
+      Gemini Vision Model                        Listing Text Extraction
+   (label extraction + AI checks)                 (Rule 6(10) extraction)
+              |                                               |
+              ------------------------------------------------
+                                    |
+                                    v
+                    Rule Engine (compute_compliance)
+                        <-- rules.json (rules_manager.py)
+                                    |
+                        (score, found list, missing list)
+                                    v
+                          Streamlit App (app.py)
+                                    |
+        --------------------+------+-------+----------------------+
+        |                   |              |                      |
+   Tesseract OCR      Reverse Geocoding   SQLite Database    Report Modules
+ (calibrated Rule 7    (browser geo ->    (compliance_       (pdf_report.py,
+  mm measurement,        OSM Nominatim)    history.db;        report_export.py
+  font_height.py)                          scan history,      -> PDF / DOCX / CSV)
+        |                   |              analytics)                |
+        v                   v                   |                    v
+   measured_mm,        location_name    Dashboard (pandas +   Downloadable
+   verdict -> app                        st.bar_chart charts)  compliance report
 ```
 
 **Text summary of the flow:**
